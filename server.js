@@ -1,14 +1,10 @@
 import "dotenv/config";
 import express from "express";
+import path from "path";
+import { fileURLToPath } from "url";
 
 const app=express();
-app.use((req,res,next)=>{
-  res.setHeader("Access-Control-Allow-Origin","*");
-  res.setHeader("Access-Control-Allow-Methods","GET,OPTIONS");
-  res.setHeader("Access-Control-Allow-Headers","Content-Type,Authorization");
-  if(req.method==="OPTIONS") return res.sendStatus(204);
-  next();
-});
+const __dirname=path.dirname(fileURLToPath(import.meta.url));
 const PORT=Number(process.env.PORT||3000);
 const TMD_PAT=process.env.TMD_PAT||"";
 const TMD_URL="https://data.tmd.go.th/nwpapi/v1/forecast/location/hourly/at";
@@ -16,6 +12,10 @@ const DEF_LAT=Number(process.env.DEFAULT_LAT||6.8695);
 const DEF_LON=Number(process.env.DEFAULT_LON||101.2505);
 const DEF_NAME=process.env.DEFAULT_NAME||"Pattani Sea";
 
+const publicDir=path.join(__dirname,"public");
+app.use(express.static(publicDir));
+app.get("/",(req,res)=>res.sendFile(path.join(publicDir,"index.html")));
+app.get("/health",(req,res)=>res.json({ok:true,app:"marine-weather-mobile",staticIndex:__dirname}));
 const n=(v)=>Number.isFinite(Number(v))?Number(v):null;
 const qs=(v,d)=>Number.isFinite(Number(v))?Number(v).toFixed(d):"--";
 const degDir=(d)=>{if(d==null)return"--";const a=["N","NNE","NE","ENE","E","ESE","SE","SSE","S","SSW","SW","WSW","W","WNW","NW","NNW"];return a[Math.round(Number(d)/22.5)%16]};
@@ -34,7 +34,8 @@ async function tmdFetch(lat,lon,duration=24){
 async function marineFetch(lat,lon){
   const current="wave_height,wave_direction,wave_period,sea_surface_temperature,ocean_current_velocity,ocean_current_direction";
   const daily="wave_height_max,wave_direction_dominant,wave_period_max";
-  const url=`https://marine-api.open-meteo.com/v1/marine?latitude=${lat}&longitude=${lon}&current=${current}&daily=${daily}&velocity_unit=kn&timezone=auto&forecast_days=7`;
+  const hourly="sea_level_height_msl,ocean_current_velocity,ocean_current_direction";
+  const url=`https://marine-api.open-meteo.com/v1/marine?latitude=${lat}&longitude=${lon}&current=${current}&daily=${daily}&hourly=${hourly}&velocity_unit=kn&timezone=Asia%2FBangkok&forecast_days=7`;
   const r=await fetch(url); if(!r.ok) throw new Error(`MARINE_HTTP_${r.status}`); return r.json();
 }
 function dayKey(t){return String(t||"").slice(0,10)}
@@ -72,6 +73,20 @@ app.get("/api/dashboard",async(req,res)=>{
     date,...(byDate.get(date)||{}),...(seaDays.find(x=>x.date===date)||{})
   }));
   const mc=marine?.current||{};
+  const mh=marine?.hourly||{};
+  const tideHourly=(mh.time||[]).map((time,i)=>({
+    time,level:n(mh.sea_level_height_msl?.[i]),
+    current:n(mh.ocean_current_velocity?.[i]),
+    direction:n(mh.ocean_current_direction?.[i])
+  }));
+  const tideDays=[...new Set(tideHourly.map(x=>x.time.slice(0,10)))];
+  const tideEvents=[];
+  for(let i=1;i<tideHourly.length-1;i++){
+    const a=tideHourly[i-1],b=tideHourly[i],c=tideHourly[i+1];
+    if(a.level==null||b.level==null||c.level==null)continue;
+    if(b.level>=a.level&&b.level>c.level)tideEvents.push({time:b.time,type:"HIGH",level:b.level});
+    if(b.level<=a.level&&b.level<c.level)tideEvents.push({time:b.time,type:"LOW",level:b.level});
+  }
   res.set("Cache-Control","no-store");
   res.json({
     source:{weather:"TMD NWP",marine:"Open-Meteo Marine"},
@@ -84,8 +99,13 @@ app.get("/api/dashboard",async(req,res)=>{
     sea:{
       valid:!!marine,time:mc.time||null,wave:n(mc.wave_height),waveDir:n(mc.wave_direction),period:n(mc.wave_period),
       temp:n(mc.sea_surface_temperature),current:n(mc.ocean_current_velocity),currentDir:n(mc.ocean_current_direction)
-    },days
+    },days,tide:{source:"Open-Meteo Marine model",days:tideDays,hourly:tideHourly,events:tideEvents}
   });
 });
 app.get("/api/health",(req,res)=>res.json({ok:true,tmdTokenConfigured:!!TMD_PAT}));
-app.listen(PORT,()=>console.log(`Marine Weather Mobile: http://localhost:${PORT}`));
+app.use((req,res)=>{
+  if(req.path.startsWith("/api/")) return res.status(404).json({error:"API_ROUTE_NOT_FOUND",path:req.path});
+  if(req.method==="GET" && !path.extname(req.path)) return res.sendFile(path.join(publicDir,"index.html"));
+  res.status(404).send("Static asset not found");
+});
+app.listen(PORT,"0.0.0.0",()=>console.log(`Marine Weather Mobile: http://localhost:${PORT}`));

@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: marine-weather-api
+    name: marine-weather-mobile
     runtime: node
     plan: free
     buildCommand: npm install
@@ -9,9 +9,3 @@ services:
     envVars:
       - key: TMD_PAT
         sync: false
-      - key: DEFAULT_LAT
-        value: "6.8695"
-      - key: DEFAULT_LON
-        value: "101.2505"
-      - key: DEFAULT_NAME
-        value: "Pattani Sea"
